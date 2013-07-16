@@ -140,6 +140,10 @@ CONFIGURATION
         By default users are created as Unprivileged, but you can change
         this by setting $LDAPCreatePrivileged to 1.
 
+    "Set($LDAPUpdateSetsPrivileged, 1);"
+        RT will make existing RT users found in LDAP Privileged if you set
+        $LDAPUpdateSetsPrivileged to 1.
+
     "Set($LDAPGroupName,'My Imported Users');"
         The RT Group new and updated users belong to. By default, all users
         added or updated by the importer will belong to the 'Imported from
@@ -305,6 +309,9 @@ METHODS
 
     By default users are created as Unprivileged, but you can change this by
     setting $LDAPCreatePrivileged to 1.
+
+    RT will make existing RT users found in LDAP Privileged if you set
+    $LDAPUpdateSetsPrivileged to 1.
 
   _import_user
     We have found a user to attempt to import; returns the RT::User object

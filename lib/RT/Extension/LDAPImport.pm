@@ -530,6 +530,9 @@ together with a single space.
 By default users are created as Unprivileged, but you can change this by
 setting C<$LDAPCreatePrivileged> to 1.
 
+RT will make existing RT users found in LDAP Privileged if you set
+$LDAPUpdateSetsPrivileged to 1.
+
 =cut
 
 sub import_users {
@@ -882,6 +885,7 @@ sub create_rt_user {
         if ($RT::LDAPUpdateUsers || $RT::LDAPUpdateOnly) {
             $self->_debug("$message, updating their data");
             if ($args{import}) {
+		$user->{'Privileged'} = $RT::LDAPCreatePrivileged if $RT::LDAPUpdateSetsPrivileged;
                 my @results = $user_obj->Update( ARGSRef => $user, AttributesRef => [keys %$user] );
                 $self->_debug(join("\n",@results)||'no change');
             } else {
