@@ -67,11 +67,28 @@ Hostname or ldap(s):// uri:
 
 =item C<< Set($LDAPUser, 'uid=foo,ou=users,dc=example,dc=com'); >>
 
-Your LDAP username or DN. If unset, we'll attempt an anonymous bind.
+Your LDAP username or DN. If unset, we'll attempt an SASL or an
+anonymous bind.
 
 =item C<< Set($LDAPPassword, 'ldap pass'); >>
 
 Your LDAP password.
+
+=item C<< Set($LDAPSASLArgs, { mechanism => 'GSSAPI' }); >>
+
+If set, use SASL for LDAP binds, passing this hashref to the
+Authen::SASL constructor
+
+=item C<< Set($LDAPSASLPlugin, "Perl"); >>
+
+If using SASL LDAP binds, the Authen::SASL plugin to use
+
+Default value is Perl
+
+=item C<< Set($LDAPStartTLSArgs, { verify => 'require', capath => '/etc/ssl/certs' }); >>
+
+If set, use Start TLS with the LDAP connection before binding, passing
+this hashref to the Net::LDAP start_tls method
 
 =item C<< Set($LDAPBase, 'ou=People,o=Our Place'); >>
 
@@ -338,10 +355,26 @@ sub connect_ldap {
         return;
     }
 
+    if ($RT::LDAPStartTLSArgs) {
+        $self->_debug("starting TLS");
+        $ldap->start_tls( %{ $RT::LDAPStartTLSArgs } );
+    }
+
     my $msg;
     if ($RT::LDAPUser) {
         $self->_debug("binding as $RT::LDAPUser");
         $msg = $ldap->bind($RT::LDAPUser, password => $RT::LDAPPassword);
+    } elsif ($RT::LDAPSASLArgs) {
+        $self->_debug("binding with SASL");
+        eval {
+            use Authen::SASL ($RT::LDAPSASLPlugin || 'Perl');
+        };
+        if ($@) {
+            $self->_error("Unable to load Authen::SASL: " . $@);
+            return;
+        }
+        my $sasl = Authen::SASL->new( %{ $RT::LDAPSASLArgs } );
+        $msg = $ldap->bind( sasl => $sasl );
     } else {
         $self->_debug("binding anonymously");
         $msg = $ldap->bind;
