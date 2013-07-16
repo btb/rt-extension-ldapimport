@@ -1447,6 +1447,7 @@ sub add_group_members {
         } else {
             $username = $member;
         }
+        my $rt_user = $self->create_rt_user( import => $args{import}, user => { Name => $username } );
         if ( delete $rt_group_members{$username} ) {
             $self->_debug("\t$username\tin RT and LDAP");
             next;
@@ -1454,7 +1455,6 @@ sub add_group_members {
         $self->_debug($group ? "\t$username\tin LDAP, adding to RT" : "\t$username");
         next unless $args{import};
 
-        my $rt_user = $self->create_rt_user( user => { Name => $username } );
         unless ($rt_user->Id) {
             $self->_warn("Unable to load or create $username");
             next;
