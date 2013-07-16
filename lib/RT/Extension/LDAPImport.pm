@@ -249,11 +249,12 @@ will then be compared to the RT user name, which came from the LDAP
 user record. See F<t/group-callbacks.t> for a complex example of
 using a code reference as value of this option.
 
-C<Member_Attr_Value>, which defaults to 'dn', specifies where on the LDAP
-user record the importer should look to compare the member value.
-A match between the member field on the group record and this
-identifier (dn or other LDAP field) on a user record means the
-user will be added to that group in RT.
+C<Member_Attr_Value>, specifies where on the LDAP user record the
+importer should look to compare the member value.  A match between the
+member field on the group record and this identifier (dn or other LDAP
+field) on a user record means the user will be added to that group in
+RT. If not set, the member field itself will be used as the username
+to add in RT.
 
 C<id> is the field in LDAP group record that uniquely identifies
 the group. This is optional and shouldn't be equal to mapping for
@@ -1376,8 +1377,8 @@ sub add_group_members {
         my $username;
         if (exists $users->{lc $member}) {
             next unless $username = $users->{lc $member};
-        } else {
-            my $attr    = lc($RT::LDAPGroupMapping->{Member_Attr_Value} || 'dn');
+        } elsif ( $RT::LDAPGroupMapping->{Member_Attr_Value} ) {
+            my $attr    = lc($RT::LDAPGroupMapping->{Member_Attr_Value});
             my $base    = $attr eq 'dn' ? $member : $RT::LDAPBase;
             my $filter  = $attr eq 'dn'
                             ? $RT::LDAPFilter
@@ -1393,6 +1394,8 @@ sub add_group_members {
             }
             my $ldap_user = shift @results;
             $username = $self->_cache_user( ldap_entry => $ldap_user );
+        } else {
+            $username = $member;
         }
         if ( delete $rt_group_members{$username} ) {
             $self->_debug("\t$username\tin RT and LDAP");
