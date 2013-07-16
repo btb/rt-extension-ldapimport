@@ -5,7 +5,7 @@ our $VERSION = '0.34';
 use warnings;
 use strict;
 use base qw(Class::Accessor);
-__PACKAGE__->mk_accessors(qw(_ldap _group screendebug _users));
+__PACKAGE__->mk_accessors(qw(_ldap _group screendebug _users _groups));
 use Carp;
 use Net::LDAP;
 use Net::LDAP::Util qw(escape_filter_value);
@@ -625,6 +625,40 @@ sub _cache_user {
     return $self->_users->{lc $membership_key} = $user->{Name};
 }
 
+=head2 _cache_group ldap_entry => Net::LDAP::Entry, [group => { ... }]
+
+Adds the group to a global cache which is used when importing groups later.
+
+Optionally takes a second argument which is a group data object returned by
+_build_group_object.  If not given, _cache_group will call _build_group_object
+itself.
+
+Returns the group Name.
+
+=cut
+
+sub _cache_group {
+    my $self = shift;
+    my %args = (@_);
+    my $group = $args{group} || $self->_build_group_object( ldap_entry => $args{ldap_entry} );
+
+    $self->_groups({}) if not defined $self->_groups;
+
+    my $group_map       = $RT::LDAPGroupMapping           || {};
+    my $member_attr_val = $group_map->{MemberGroup_Attr_Value} || 'dn';
+    my $membership_key  = lc $member_attr_val eq 'dn'
+                            ? $args{ldap_entry}->dn
+                            : $args{ldap_entry}->get_value($member_attr_val);
+
+    # Fallback to the DN if the group record doesn't have a value
+    unless (defined $membership_key) {
+        $membership_key = $args{ldap_entry}->dn;
+        $self->_warn("Group attribute '$member_attr_val' has no value for '$membership_key'; falling back to DN");
+    }
+
+    return $self->_groups->{lc $membership_key} = $group->{Name};
+}
+
 sub _show_user_info {
     my $self = shift;
     my %args = @_;
@@ -1103,15 +1137,18 @@ sub import_groups {
         my $group = $self->_parse_ldap_mapping(
             %args,
             ldap_entry => $entry,
-            skip => qr/^Member_Attr_(Value|Regex)$/i,
+            skip => qr/^Member(Group|)_Attr_(Value|Regex)$/i,
             mapping => $mapping,
         );
-        foreach my $key ( grep !/^Member_Attr/, keys %$group ) {
+        foreach my $key ( grep !/^Member(Group|)_Attr/, keys %$group ) {
             @{ $group->{$key} } = map { ref $_ eq 'ARRAY'? $_->[0] : $_ } @{ $group->{$key} };
             $group->{$key} = join ' ', grep defined && length, @{ $group->{$key} };
         }
         @{ $group->{'Member_Attr'} } = map { ref $_ eq 'ARRAY'? @$_ : $_  } @{ $group->{'Member_Attr'} }
             if $group->{'Member_Attr'};
+        @{ $group->{'MemberGroup_Attr'} } = map { ref $_ eq 'ARRAY'? @$_ : $_  } @{ $group->{'MemberGroup_Attr'} }
+            if $group->{'MemberGroup_Attr'};
+
         $group->{Description} ||= 'Imported from LDAP';
         unless ( $group->{Name} ) {
             $self->_warn("No Name for group, skipping ".Dumper $group);
@@ -1162,9 +1199,18 @@ sub _import_group {
     my $ldap_entry = $args{ldap_entry};
 
     $self->_debug("Processing group $group->{Name}");
+    $ldap_entry->dump if $self->screendebug;
     my ($group_obj, $created) = $self->create_rt_group( %args, group => $group );
     return if $args{import} and not $group_obj;
     $self->add_group_members(
+        %args,
+        name => $group->{Name},
+        info => $group,
+        group => $group_obj,
+        ldap_entry => $ldap_entry,
+        new => $created,
+    );
+    $self->add_group_subgroups(
         %args,
         name => $group->{Name},
         info => $group,
@@ -1404,13 +1450,12 @@ sub add_group_members {
         $self->_debug($group ? "\t$username\tin LDAP, adding to RT" : "\t$username");
         next unless $args{import};
 
-        my $rt_user = RT::User->new($RT::SystemUser);
-        my ($res,$msg) = $rt_user->Load( $username );
-        unless ($res) {
-            $self->_warn("Unable to load $username: $msg");
+        my $rt_user = $self->create_rt_user( user => { Name => $username } );
+        unless ($rt_user->Id) {
+            $self->_warn("Unable to load or create $username");
             next;
         }
-        ($res,$msg) = $group->AddMember($rt_user->PrincipalObj->Id);
+        my ($res,$msg) = $group->AddMember($rt_user->PrincipalObj->Id);
         unless ($res) {
             $self->_warn("Failed to add $username to $groupname: $msg");
         }
@@ -1423,6 +1468,101 @@ sub add_group_members {
         my ($res,$msg) = $group->DeleteMember($rt_group_members{$username}->PrincipalObj->Id);
         unless ($res) {
             $self->_warn("Failed to remove $username to $groupname: $msg");
+        }
+    }
+}
+
+=head3 add_group_subgroups
+
+Iterate over the list of values in the C<MemberGroup_Attr> LDAP entry.
+Look up the appropriate member group from LDAP.
+Add those member groups to the group.
+Remove subgroups of the RT Group who are no longer member groups
+of the LDAP group.
+
+=cut
+
+sub add_group_subgroups {
+    my $self = shift;
+    my %args = @_;
+    my $group = $args{group};
+    my $groupname = $args{name};
+    my $ldap_entry = $args{ldap_entry};
+
+    $self->_debug("Processing subgroup membership for $groupname");
+
+    my $members = $args{'info'}{'MemberGroup_Attr'};
+    unless (defined $members) {
+        $self->_warn("No members found for $groupname in MemberGroup_Attr");
+        return;
+    }
+
+    if ( exists $RT::LDAPGroupMapping->{MemberGroup_Attr_Regex}
+         and defined $RT::LDAPGroupMapping->{MemberGroup_Attr_Regex} ) {
+        @{$members} = map{ /$RT::LDAPGroupMapping->{MemberGroup_Attr_Regex}/ } @{$members};
+    }
+
+    my %rt_group_members;
+    if ($args{group} and not $args{new}) {
+        my $subgroup_members = $group->GroupMembersObj( Recursively => 0);
+        while ( my $member = $subgroup_members->Next ) {
+            $rt_group_members{$member->Name} = $member;
+        }
+    } elsif (not $args{import}) {
+        $self->_debug("No group in RT, would create with subgroups:");
+    }
+
+    my $subgroups = $self->_groups;
+    foreach my $member (@$members) {
+        my $subgroupname;
+        if (exists $subgroups->{lc $member}) {
+            next unless $subgroupname = $subgroups->{lc $member};
+        } elsif ( $RT::LDAPGroupMapping->{MemberGroup_Attr_Value} ) {
+            my $attr    = lc($RT::LDAPGroupMapping->{MemberGroup_Attr_Value});
+            my $base    = $attr eq 'dn' ? $member : $RT::LDAPGroupBase;
+            my $filter  = $attr eq 'dn'
+                            ? $RT::LDAPGroupFilter
+                            : "(&$RT::LDAPGroupFilter($attr=" . escape_filter_value($member) . "))";
+            my @results = $self->_run_search(
+                base   => $base,
+                filter => $filter,
+            );
+            unless ( @results ) {
+                $subgroups->{lc $member} = undef;
+                $self->_error("No group found for $member who should be a member group of $groupname");
+                next;
+            }
+            my $ldap_user = shift @results;
+            $subgroupname = $self->_cache_user( ldap_entry => $ldap_user );
+        } else {
+            $subgroupname = $member;
+        }
+        if ( delete $rt_group_members{$subgroupname} ) {
+            $self->_debug("\t$subgroupname\tin RT and LDAP");
+            next;
+        }
+        $self->_debug($group ? "\t$subgroupname\tin LDAP, adding to RT" : "\t$subgroupname");
+        next unless $args{import};
+
+        my $rt_group = RT::Group->new($RT::SystemUser);
+        my ($res,$msg) = $rt_group->LoadUserDefinedGroup( $subgroupname );
+        unless ($res) {
+            $self->_warn("Unable to load $subgroupname: $msg");
+            next;
+        }
+        ($res,$msg) = $group->AddMember($rt_group->PrincipalObj->Id);
+        unless ($res) {
+            $self->_warn("Failed to add $subgroupname to $groupname: $msg");
+        }
+    }
+
+    for my $subgroupname (sort keys %rt_group_members) {
+        $self->_debug("\t$subgroupname\tin RT, not in LDAP, removing");
+        next unless $args{import};
+
+        my ($res,$msg) = $group->DeleteMember($rt_group_members{$subgroupname}->PrincipalObj->Id);
+        unless ($res) {
+            $self->_warn("Failed to remove $subgroupname to $groupname: $msg");
         }
     }
 }
