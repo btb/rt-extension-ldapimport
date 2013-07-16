@@ -326,6 +326,23 @@ It may work with RT 3.6.
 The L<ldapsearch|http://www.openldap.org/software/man.cgi?query=ldapsearch&manpath=OpenLDAP+2.0-Release>
 utility in openldap can be very helpful while refining your filters.
 
+=head1 CONFIGURATION
+
+If the LDAP group field you are mapping to doesn't have a
+simple username, you provide a regex to pull the name out
+with Member_Attr_Regex. The capture value in the regex will be
+used to find the username.
+
+    Set($LDAPGroupMapping, {Name               => 'cn',
+                            Member_Attr        => 'member',
+                            Member_Attr_Value  => 'dn'
+                            Member_Attr_Regex   => qr/^cn=(\w+)\,/,
+                           });
+
+The above would pull the name out of an entry something like
+
+    cn=somename,ou=company
+
 =head1 METHODS
 
 =head2 connect_ldap
@@ -1085,7 +1102,7 @@ sub import_groups {
         my $group = $self->_parse_ldap_mapping(
             %args,
             ldap_entry => $entry,
-            skip => qr/^Member_Attr_Value$/i,
+            skip => qr/^Member_Attr_(Value|Regex)$/i,
             mapping => $mapping,
         );
         foreach my $key ( grep !/^Member_Attr/, keys %$group ) {
@@ -1337,6 +1354,11 @@ sub add_group_members {
     unless (defined $members) {
         $self->_warn("No members found for $groupname in Member_Attr");
         return;
+    }
+
+    if ( exists $RT::LDAPGroupMapping->{Member_Attr_Regex}
+         and defined $RT::LDAPGroupMapping->{Member_Attr_Regex} ) {
+        @{$members} = map{ /$RT::LDAPGroupMapping->{Member_Attr_Regex}/ } @{$members};
     }
 
     my %rt_group_members;
