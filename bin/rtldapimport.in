@@ -34,13 +34,14 @@ my %OPT = (
 use Getopt::Long;
 GetOptions(
     \%OPT,
-    'debug', 'help',
+    'quiet', 'debug', 'help',
     'import', 'users!', 'groups!',
 );
 if ($OPT{help}) {
    print <<USAGE;
 $0: [--debug] [--import] [--help]
      --help           This usage statement.
+     --quiet          Less output.
      --debug          Enable debugging.
      --import         Do the import.
      --no-users       Skip users.
@@ -54,14 +55,17 @@ $importer->screendebug(1) if $OPT{debug};
 
 if ($OPT{import}) {
     if ($OPT{users}) {
-        print "Starting import\n";
+        print "Starting import\n"
+            unless $OPT{quiet};
         $importer->import_users(import => 1);
     }
     if ($OPT{groups}) {
-        print "Starting group import\n";
+        print "Starting group import\n"
+            unless $OPT{quiet};
         $importer->import_groups(import => 1);
     }
-    print "Finished import\n";
+    print "Finished import\n"
+        unless $OPT{quiet};
 } else {
     print <<TESTING;
 Running test import, no data will be changed

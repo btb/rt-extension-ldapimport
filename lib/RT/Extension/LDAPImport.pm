@@ -628,40 +628,6 @@ sub _cache_user {
     return $self->_users->{lc $membership_key} = $user->{Name};
 }
 
-=head2 _cache_group ldap_entry => Net::LDAP::Entry, [group => { ... }]
-
-Adds the group to a global cache which is used when importing groups later.
-
-Optionally takes a second argument which is a group data object returned by
-_build_group_object.  If not given, _cache_group will call _build_group_object
-itself.
-
-Returns the group Name.
-
-=cut
-
-sub _cache_group {
-    my $self = shift;
-    my %args = (@_);
-    my $group = $args{group} || $self->_build_group_object( ldap_entry => $args{ldap_entry} );
-
-    $self->_groups({}) if not defined $self->_groups;
-
-    my $group_map       = $RT::LDAPGroupMapping           || {};
-    my $member_attr_val = $group_map->{MemberGroup_Attr_Value} || 'dn';
-    my $membership_key  = lc $member_attr_val eq 'dn'
-                            ? $args{ldap_entry}->dn
-                            : $args{ldap_entry}->get_value($member_attr_val);
-
-    # Fallback to the DN if the group record doesn't have a value
-    unless (defined $membership_key) {
-        $membership_key = $args{ldap_entry}->dn;
-        $self->_warn("Group attribute '$member_attr_val' has no value for '$membership_key'; falling back to DN");
-    }
-
-    return $self->_groups->{lc $membership_key} = $group->{Name};
-}
-
 sub _show_user_info {
     my $self = shift;
     my %args = @_;
@@ -887,6 +853,7 @@ sub create_rt_user {
             if ($args{import}) {
 		$user->{'Privileged'} = $RT::LDAPCreatePrivileged if $RT::LDAPUpdateSetsPrivileged;
                 my @results = $user_obj->Update( ARGSRef => $user, AttributesRef => [keys %$user] );
+                print join("\n",@results)."\n" if @results;
                 $self->_debug(join("\n",@results)||'no change');
             } else {
                 $self->_debug("Found existing user $user->{Name} to update");
@@ -907,6 +874,7 @@ sub create_rt_user {
                     $self->_error("couldn't create user_obj for $user->{Name}: $msg");
                     return;
                 }
+                print "Created user $user->{Name} with id " . $user_obj->Id . "\n";
                 $self->_debug("Created user for $user->{Name} with id ".$user_obj->Id);
             } else {
                 print "Found new user $user->{Name} to create in RT\n";
@@ -994,6 +962,7 @@ sub setup_group  {
         unless ($id) {
             $self->_error("Can't create group $group_name [$msg]")
         }
+        print "Created group $group_name with id " . $group->Id . "\n";
     }
 
     $self->_group($group);
@@ -1258,6 +1227,7 @@ sub create_rt_group {
         if ($args{import}) {
             $self->_debug("Group $group->{Name} already exists as ".$group_obj->Id.", updating their data");
             my @results = $group_obj->Update( ARGSRef => $group, AttributesRef => [keys %$group] );
+            print join("\n",@results) . "\n" if @results;
             $self->_debug(join("\n",@results)||'no change');
         } else {
             print "Found existing group $group->{Name} to update\n";
@@ -1276,6 +1246,7 @@ sub create_rt_group {
                 return;
             }
             $created = $val;
+            print "Created group $group->{Name} with id " . $group_obj->Id . "\n";
             $self->_debug("Created group for $group->{Name} with id ".$group_obj->Id);
 
             if ( $id ) {
