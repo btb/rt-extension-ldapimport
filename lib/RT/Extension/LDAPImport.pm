@@ -179,11 +179,12 @@ Mapping is processed in literal order of the keys.
 =back
 
 The keys in the mapping (i.e. the RT fields, the left hand side) may be a user
-custom field name prefixed with C<UserCF.>, for example C<< 'UserCF.Employee
-Number' => 'employeeId' >>.  Note that this only B<adds> values at the moment,
-which on single value CFs will remove any old value first.  Multiple value CFs
-may behave not quite how you expect.  If the attribute no longer exists on a
-user in LDAP, it will be cleared on the RT side as well.
+or group custom field name prefixed with C<UserCF.> or C<GroupCF.>, for example
+C<< 'UserCF.Employee Number' => 'employeeId' >>.  Note that this only B<adds>
+values at the moment, which on single value CFs will remove any old value
+first.  Multiple value CFs may behave not quite how you expect.  If the
+attribute no longer exists on a record in LDAP, it will be cleared on the RT
+side as well.
 
 You may also prefix any RT custom field name with C<CF.> inside your mapping to
 add available values to a Select custom field.  This effectively takes user
@@ -1045,14 +1046,13 @@ sub update_object_custom_field_values {
 
     my $data = $self->_build_object(
         %args,
-        only => qr/^UserCF\.(.+)$/i,
-        mapping => $RT::LDAPMapping,
+        only => qr/^(User|Group)CF\.(.+)$/i,
+        mapping => ( $obj->isa('RT::Group') ? $RT::LDAPGroupMapping : $RT::LDAPMapping ),
     );
 
     foreach my $rtfield ( keys %$data ) {
-        # XXX TODO: accept GroupCF when we call this from group_import too
-        next unless $rtfield =~ /^UserCF\.(.+)$/i;
-        my $cf_name = $1;
+        next unless $rtfield =~ /^(User|Group)CF\.(.+)$/i;
+        my $cf_name = $2;
         # XXX TODO: value can not be undefined, but empty string
         my $value = $data->{$rtfield};
 
@@ -1191,7 +1191,7 @@ sub _import_group {
         ldap_entry => $ldap_entry,
         new => $created,
     );
-    # XXX TODO: support OCFVs for groups too
+    $self->update_object_custom_field_values( %args, object => $group_obj );
     return;
 }
 
